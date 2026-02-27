@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "formalchip"
+version = "0.1.0"
+description = "UlamaI-style formal verification acceleration for hardware teams"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "FormalChip" }]
+keywords = ["formal-verification", "hardware", "sva", "symbiyosys", "llm"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+[project.scripts]
+formalchip = "formalchip.cli:main"
+
+[tool.setuptools]
+packages = ["formalchip", "formalchip.engines", "formalchip.spec"]
+

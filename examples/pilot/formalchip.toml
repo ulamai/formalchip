@@ -1,0 +1,53 @@
+[project]
+name = "pilot-control"
+rtl_files = ["rtl/top.sv"]
+top_module = "top"
+clock = "clk"
+reset = "rst_n"
+reset_active_low = true
+
+[llm]
+backend = "deterministic"
+model = "formalchip-template-v1"
+
+[engine]
+# Use `symbiyosys` for real proofs if installed. `mock` is CI-safe.
+kind = "mock"
+pass_after = 2
+# command = "sby"
+# sby_file = "formal/top.sby"
+
+[loop]
+max_iterations = 3
+workdir = ".formalchip/runs"
+
+[[specs]]
+kind = "text"
+path = "spec/control_logic.md"
+
+[[specs]]
+kind = "register_csv"
+path = "spec/registers.csv"
+
+[[specs]]
+kind = "rule_table_csv"
+path = "spec/protocol_rules.csv"
+
+[[libraries]]
+kind = "handshake"
+req = "req"
+ack = "ack"
+bound = 4
+
+[[libraries]]
+kind = "fifo_safety"
+full = "fifo_full"
+empty = "fifo_empty"
+push = "fifo_push"
+pop = "fifo_pop"
+
+[[libraries]]
+kind = "reset_sequence"
+signal = "valid"
+value = "1'b0"
+latency = 1

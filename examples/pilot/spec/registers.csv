@@ -1,0 +1,3 @@
+name,address,width,reset,access
+STATUS,0x00,32,0x0,ro
+CTRL,0x04,32,0x0,rw

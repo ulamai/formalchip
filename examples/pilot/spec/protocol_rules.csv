@@ -1,0 +1,4 @@
+rule_id,condition,guarantee
+R1,req,ack
+R2,fifo_full,!fifo_push
+R3,fifo_empty,!fifo_pop
