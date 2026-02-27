@@ -9,6 +9,7 @@ from .doctor import format_doctor_report, run_doctor
 from .evidence import build_evidence_pack
 from .loop import run_formalchip
 from .pipeline import build_initial_synthesis
+from .pilot import scaffold_open_source_pilot
 from .reporting import load_report
 from .synthesis import is_placeholder_candidate, write_candidate_file
 from .util import write_json
@@ -20,6 +21,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_init = sub.add_parser("init", help="Create a starter FormalChip project")
     p_init.add_argument("path", nargs="?", default=".", help="Target directory")
+
+    p_pilot = sub.add_parser(
+        "pilot-init",
+        help="Scaffold an open-source pilot package (RTL + canonical 10 properties + CI/evidence layout)",
+    )
+    p_pilot.add_argument("path", nargs="?", default="examples/open-pilot", help="Target directory")
 
     p_doctor = sub.add_parser("doctor", help="Validate config/tooling and preview synthesis quality")
     p_doctor.add_argument("--config", required=True, help="Path to formalchip config (toml/json/yaml)")
@@ -52,6 +59,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "init":
         _init_project(Path(args.path).resolve())
+        return 0
+
+    if args.cmd == "pilot-init":
+        target = Path(args.path).resolve()
+        scaffold_open_source_pilot(target)
+        print(f"Initialized open-source pilot at {target}")
         return 0
 
     if args.cmd == "doctor":
@@ -296,4 +309,3 @@ def _write_if_missing(path: Path, content: str) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-

@@ -30,12 +30,29 @@ _SV_KEYWORDS = {
     "true",
     "false",
 }
+_SV_SYSTEM_FUNCTIONS = {
+    "past",
+    "rose",
+    "fell",
+    "stable",
+    "changed",
+    "sampled",
+    "countones",
+    "isunknown",
+    "onehot",
+    "onehot0",
+    "clog2",
+    "bits",
+    "signed",
+    "unsigned",
+}
 
 SUPPORTED_LIBRARY_KINDS = {
     "handshake",
     "fifo_safety",
     "reset_sequence",
     "inline",
+    "canonical_10",
 }
 
 
@@ -133,6 +150,11 @@ def _extract_identifiers(expr: str) -> list[str]:
     for tok in _TOKEN_RE.findall(expr):
         low = tok.lower()
         if low in _SV_KEYWORDS:
+            continue
+        if low in _SV_SYSTEM_FUNCTIONS:
+            continue
+        # Skip base-literal tails like d0, hff, b1010 from 8'd0 / 8'hff.
+        if re.match(r"^[dhbo][0-9a-fxz_]+$", low):
             continue
         out.append(tok)
     return out
@@ -432,6 +454,130 @@ def _inline_library_candidate(pattern: LibraryPattern, inputs: SynthesisInputs) 
     ]
 
 
+def _canonical_10_candidates(pattern: LibraryPattern, inputs: SynthesisInputs) -> list[PropertyCandidate]:
+    """
+    Canonical pilot property set (10 patterns):
+    - 4 handshake/control assertions
+    - 4 FIFO safety assertions
+    - 1 reset assertion
+    - 1 coverage property
+    """
+    o = pattern.options
+    req = str(o.get("req", "req"))
+    ack = str(o.get("ack", "ack"))
+    push = str(o.get("push", "push"))
+    pop = str(o.get("pop", "pop"))
+    full = str(o.get("full", "full"))
+    empty = str(o.get("empty", "empty"))
+    level = str(o.get("level", "level"))
+    level_max = str(o.get("level_max", "4"))
+    valid = str(o.get("valid", "valid"))
+    bound = int(o.get("bound", 4))
+    level_width = int(o.get("level_width", 8))
+
+    disable = _reset_disable(inputs.reset, inputs.reset_active_low)
+    reset_asserted = _reset_asserted(inputs.reset, inputs.reset_active_low)
+
+    specs: list[tuple[str, str, str, Literal["assert", "assume", "cover"], str | None]] = [
+        (
+            "c10_01_req_ack_within_bound",
+            "c10_01_req_ack_within_bound",
+            f"@({clocking(inputs.clock)}) {disable} {req} |-> ##[0:{bound}] {ack};",
+            "assert",
+            "Handshake eventual ack within bound.",
+        ),
+        (
+            "c10_02_ack_has_req",
+            "c10_02_ack_has_req",
+            f"@({clocking(inputs.clock)}) {disable} {ack} |-> ({req} || $past({req}));",
+            "assert",
+            "Ack should correspond to a current or prior request.",
+        ),
+        (
+            "c10_03_req_held_until_ack",
+            "c10_03_req_held_until_ack",
+            f"@({clocking(inputs.clock)}) {disable} ({req} && !{ack}) |=> {req};",
+            "assert",
+            "Request remains asserted until acknowledged.",
+        ),
+        (
+            "c10_04_no_spurious_push_pop",
+            "c10_04_no_spurious_push_pop",
+            f"@({clocking(inputs.clock)}) {disable} !({push} && {pop} && {empty});",
+            "assert",
+            "Avoid invalid simultaneous pop on empty while push/pop toggles.",
+        ),
+        (
+            "c10_05_no_overflow",
+            "c10_05_no_overflow",
+            f"@({clocking(inputs.clock)}) {disable} !({full} && {push});",
+            "assert",
+            "FIFO overflow safety.",
+        ),
+        (
+            "c10_06_no_underflow",
+            "c10_06_no_underflow",
+            f"@({clocking(inputs.clock)}) {disable} !({empty} && {pop});",
+            "assert",
+            "FIFO underflow safety.",
+        ),
+        (
+            "c10_07_level_flag_empty",
+            "c10_07_level_flag_empty",
+            f"@({clocking(inputs.clock)}) {disable} ({empty}) |-> ({level} == {level_width}'d0);",
+            "assert",
+            "Empty flag implies level == 0.",
+        ),
+        (
+            "c10_08_level_flag_full",
+            "c10_08_level_flag_full",
+            f"@({clocking(inputs.clock)}) {disable} ({full}) |-> ({level} == {_const_sv(level_max, level_width)});",
+            "assert",
+            "Full flag implies level == max.",
+        ),
+        (
+            "c10_09_reset_valid_low",
+            "c10_09_reset_valid_low",
+            f"@({clocking(inputs.clock)}) {reset_asserted} |=> ({valid} == 1'b0);",
+            "assert",
+            "Reset safety on output valid.",
+        ),
+        (
+            "c10_10_cover_req_ack_cycle",
+            "c10_10_cover_req_ack_cycle",
+            f"@({clocking(inputs.clock)}) {disable} {req} ##[1:{bound}] {ack};",
+            "cover",
+            "Coverage: observe request-to-ack scenario.",
+        ),
+    ]
+
+    out: list[PropertyCandidate] = []
+    for prop_id, name, body, kind, note in specs:
+        required = _extract_identifiers(body)
+        missing = _missing_signals(sorted(set(required)), inputs.known_signals)
+        if missing:
+            out.append(
+                _mk_assert(
+                    prop_id,
+                    f"{name}_placeholder",
+                    _placeholder_body(inputs.clock, inputs.reset, inputs.reset_active_low),
+                    notes=f"canonical_10 missing signals: {', '.join(missing)}",
+                )
+            )
+            continue
+        out.append(
+            _mk_property(
+                prop_id=prop_id,
+                name=name,
+                body=body,
+                kind=kind,
+                notes=note,
+            )
+        )
+
+    return out
+
+
 def _library_candidates(pattern: LibraryPattern, inputs: SynthesisInputs) -> list[PropertyCandidate]:
     disable = _reset_disable(inputs.reset, inputs.reset_active_low)
     kind = pattern.kind.lower()
@@ -524,6 +670,8 @@ def _library_candidates(pattern: LibraryPattern, inputs: SynthesisInputs) -> lis
 
     elif kind == "inline":
         candidates.extend(_inline_library_candidate(pattern, inputs))
+    elif kind == "canonical_10":
+        candidates.extend(_canonical_10_candidates(pattern, inputs))
 
     return candidates
 

@@ -82,6 +82,35 @@ class SynthesisFeatureTests(unittest.TestCase):
         self.assertIn("valid == 1'b0", candidates[0].body)
         self.assertFalse(is_placeholder_candidate(candidates[0]))
 
+    def test_canonical_10_library_count(self) -> None:
+        inputs = SynthesisInputs(
+            clock="clk",
+            reset="rst_n",
+            reset_active_low=True,
+            known_signals={"clk", "rst_n", "req", "ack", "push", "pop", "full", "empty", "level", "valid"},
+        )
+        libs = [
+            LibraryPattern(
+                kind="canonical_10",
+                options={
+                    "req": "req",
+                    "ack": "ack",
+                    "push": "push",
+                    "pop": "pop",
+                    "full": "full",
+                    "empty": "empty",
+                    "level": "level",
+                    "level_width": 3,
+                    "level_max": "4",
+                    "valid": "valid",
+                    "bound": 4,
+                },
+            )
+        ]
+
+        candidates = synthesize_candidates([], libs, inputs)
+        self.assertEqual(len(candidates), 10)
+
 
 if __name__ == "__main__":
     unittest.main()

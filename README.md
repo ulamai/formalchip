@@ -16,6 +16,7 @@ FormalChip is an UlamaI-style control loop for hardware formal verification:
   - top-module detection sanity checks
   - synthesis quality signal (placeholder property counts)
 - Property preview with `formalchip synth` before formal runtime cost.
+- Open-source pilot scaffold with `formalchip pilot-init` (FIFO block + canonical patterns + CI script).
 - Spec ingestion:
   - Free-form text clauses
   - Register CSV definitions with optional bus mapping
@@ -24,6 +25,7 @@ FormalChip is an UlamaI-style control loop for hardware formal verification:
 - Property synthesis:
   - Reset, handshake, FIFO, and table-driven templates
   - Inline custom properties (`[[libraries]] kind = "inline"`)
+  - Canonical 10-pattern pilot library (`[[libraries]] kind = "canonical_10"`)
 - Formal adapters:
   - `symbiyosys` (real command runner)
   - `mock` (CI-safe testing)
@@ -49,6 +51,7 @@ Inspect artifacts in `examples/pilot/.formalchip/runs/<run-id>/`.
 
 ```bash
 formalchip init [path]
+formalchip pilot-init [path]
 formalchip doctor --config formalchip.toml
 formalchip synth --config formalchip.toml [--out properties.sv] [--summary-json synth.json] [--deterministic]
 formalchip run --config formalchip.toml [--max-iters N] [--skip-doctor]
@@ -90,8 +93,27 @@ expr = "(sw_we && (sw_addr == 32'h00000004)) |-> !fifo_full"
 property_kind = "assert" # assert | assume | cover
 ```
 
+### Canonical 10-pattern pilot set
+
+```toml
+[[libraries]]
+kind = "canonical_10"
+req = "req"
+ack = "ack"
+push = "push"
+pop = "pop"
+full = "full"
+empty = "empty"
+level = "level"
+level_width = 3
+level_max = "4"
+valid = "valid"
+bound = 4
+```
+
+Generates 10 canonical assertions/coverage properties for handshake, FIFO safety, and reset behavior.
+
 ## SymbiYosys notes
 
 - SymbiYosys must be installed to run the open-source formal path.
 - Use `[engine] kind = "symbiyosys"` and optionally `command` / `sby_file` in config.
-

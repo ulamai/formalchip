@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "formalchip"
-version = "0.1.0"
+version = "0.1.1"
 description = "UlamaI-style formal verification acceleration for hardware teams"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,4 +21,3 @@ formalchip = "formalchip.cli:main"
 
 [tool.setuptools]
 packages = ["formalchip", "formalchip.engines", "formalchip.spec"]
-

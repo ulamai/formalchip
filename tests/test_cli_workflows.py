@@ -35,7 +35,15 @@ class CLIWorkflowTests(unittest.TestCase):
             self.assertTrue(out.exists())
             self.assertTrue(summary.exists())
 
+    def test_pilot_init_command(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "open-pilot"
+            rc = main(["pilot-init", str(root)])
+            self.assertEqual(rc, 0)
+            self.assertTrue((root / "formalchip.toml").exists())
+            self.assertTrue((root / "rtl" / "fifo_buggy.sv").exists())
+            self.assertTrue((root / "ci" / "run-pilot.sh").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
-
