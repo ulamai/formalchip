@@ -39,6 +39,7 @@ class IterationFeedback:
     failed_properties: list[str] = field(default_factory=list)
     counterexamples: list[str] = field(default_factory=list)
     unsat_cores: list[str] = field(default_factory=list)
+    coverage_hits: int = 0
 
 
 @dataclass
@@ -51,6 +52,8 @@ class FormalResult:
     failed_properties: list[str] = field(default_factory=list)
     counterexamples: list[str] = field(default_factory=list)
     unsat_cores: list[str] = field(default_factory=list)
+    coverage_hits: int = 0
+    artifact_files: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -66,4 +69,3 @@ class RunContext:
     clock: str
     reset: str
     reset_active_low: bool
-

@@ -1,0 +1,19 @@
+{
+  "name": "formalchip-dev",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": "..",
+    "args": {
+      "APT_SNAPSHOT": "20250115T000000Z"
+    }
+  },
+  "remoteUser": "app",
+  "postCreateCommand": "python3 -m pip install --user -e . && ./scripts/print-tool-versions.sh",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3"
+      }
+    }
+  }
+}

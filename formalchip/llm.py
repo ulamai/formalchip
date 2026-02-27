@@ -9,7 +9,7 @@ from typing import Protocol
 
 from .config import LibraryPattern, LLMConfig
 from .models import IterationFeedback, PropertyCandidate, SpecClause
-from .synthesis import SynthesisInputs, synthesize_candidates
+from .synthesis import SynthesisInputs, optimize_candidates, synthesize_candidates
 
 
 class LLMBackend(Protocol):
@@ -75,7 +75,27 @@ class DeterministicLLM:
                     notes="Constrains pathological reset oscillation seen in CEX",
                 )
             )
-        return out
+        elif feedback.status == "fail" and feedback.counterexamples:
+            # If failure isn't mapped to named properties, soften all strict one-cycle implications.
+            softened: list[PropertyCandidate] = []
+            for prop in out:
+                clone = PropertyCandidate(**asdict(prop))
+                clone.body = _repair_body(clone.body)
+                softened.append(clone)
+            out = softened
+
+        if feedback.coverage_hits == 0 and {"req", "ack"}.issubset(synthesis_inputs.known_signals):
+            out.append(
+                PropertyCandidate(
+                    prop_id=f"repair_cover_{len(out)+1}",
+                    name=f"repair_cover_req_ack_{len(out)+1}",
+                    kind="cover",
+                    body=f"@(posedge {synthesis_inputs.clock}) req ##[1:4] ack;",
+                    notes="Coverage nudge added during repair to improve observability.",
+                )
+            )
+
+        return optimize_candidates(out)
 
 
 def _repair_body(body: str) -> str:

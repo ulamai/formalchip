@@ -111,6 +111,29 @@ class SynthesisFeatureTests(unittest.TestCase):
         candidates = synthesize_candidates([], libs, inputs)
         self.assertEqual(len(candidates), 10)
 
+    def test_signal_aliases_reduce_placeholders(self) -> None:
+        inputs = SynthesisInputs(
+            clock="clk",
+            reset="rst_n",
+            reset_active_low=True,
+            known_signals={"clk", "rst_n", "req", "ack"},
+            signal_aliases={"request": "req", "acknowledge": "ack"},
+        )
+        libs = [
+            LibraryPattern(
+                kind="inline",
+                options={
+                    "name": "alias_req_ack",
+                    "expr": "request |-> acknowledge",
+                    "property_kind": "assert",
+                },
+            )
+        ]
+        candidates = synthesize_candidates([], libs, inputs)
+        self.assertEqual(len(candidates), 1)
+        self.assertIn("req |-> ack", candidates[0].body)
+        self.assertFalse(is_placeholder_candidate(candidates[0]))
+
 
 if __name__ == "__main__":
     unittest.main()

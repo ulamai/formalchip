@@ -1,0 +1,11 @@
+# Reproducible toolchain lock for Docker/devcontainer builds.
+APT_SNAPSHOT=20250115T000000Z
+
+# Installed via Debian snapshot package set:
+# - sby
+# - yosys
+# - z3
+# - boolector
+#
+# To inspect resolved versions in a built environment:
+#   ./scripts/print-tool-versions.sh

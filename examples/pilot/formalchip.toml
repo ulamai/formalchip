@@ -5,6 +5,7 @@ top_module = "top"
 clock = "clk"
 reset = "rst_n"
 reset_active_low = true
+signal_aliases = { request = "req", acknowledge = "ack" }
 
 [llm]
 backend = "deterministic"
@@ -58,3 +59,15 @@ kind = "inline"
 name = "ctrl_write_decode_valid"
 expr = "(sw_we && (sw_addr == 32'h00000004)) |-> !fifo_full"
 property_kind = "assert"
+
+[constraints]
+assumptions = [
+  { name = "env_no_fifo_push_pop_when_empty", expr = "!(fifo_push && fifo_pop && fifo_empty)", note = "Avoid unrealistic simultaneous empty pop" }
+]
+covers = [
+  { name = "cover_req_ack", expr = "req ##[1:4] ack", note = "Observe at least one request/ack sequence" }
+]
+
+[kpi]
+min_time_reduction_percent = 30.0
+require_bug_or_coverage = true

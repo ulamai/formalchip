@@ -62,6 +62,7 @@ class SynthesisInputs:
     reset: str
     reset_active_low: bool
     known_signals: set[str] = field(default_factory=set)
+    signal_aliases: dict[str, str] = field(default_factory=dict)
 
 
 def supported_library_kinds() -> set[str]:
@@ -128,6 +129,33 @@ def _missing_signals(required: list[str], known_signals: set[str]) -> list[str]:
     return [sig for sig in required if sig not in known_signals]
 
 
+def _resolve_signal_name(name: str, inputs: SynthesisInputs) -> str:
+    if name in inputs.signal_aliases:
+        return inputs.signal_aliases[name]
+    low = name.lower()
+    if low in inputs.signal_aliases:
+        return inputs.signal_aliases[low]
+    up = name.upper()
+    if up in inputs.signal_aliases:
+        return inputs.signal_aliases[up]
+    return name
+
+
+def _apply_aliases(expr: str, inputs: SynthesisInputs) -> str:
+    if not inputs.signal_aliases:
+        return expr
+
+    def repl(match: re.Match[str]) -> str:
+        tok = match.group(0)
+        return _resolve_signal_name(tok, inputs)
+
+    return _TOKEN_RE.sub(repl, expr)
+
+
+def _required_signals(required: list[str], inputs: SynthesisInputs) -> list[str]:
+    return [_resolve_signal_name(sig, inputs) for sig in required]
+
+
 def _fallback_assert(
     clause: SpecClause,
     name: str,
@@ -168,8 +196,8 @@ def _text_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs) -> l
     # Pattern: "if a then b next cycle"
     m = re.search(r"if\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+then\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+next\s+cycle", lower)
     if m:
-        cond, cons = m.group(1), m.group(2)
-        missing = _missing_signals([cond, cons], inputs.known_signals)
+        cond, cons = _resolve_signal_name(m.group(1), inputs), _resolve_signal_name(m.group(2), inputs)
+        missing = _missing_signals(_required_signals([cond, cons], inputs), inputs.known_signals)
         if missing:
             return [
                 _fallback_assert(
@@ -194,8 +222,8 @@ def _text_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs) -> l
     # Pattern: "never a and b"
     m = re.search(r"never\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+and\s+([a-zA-Z_][a-zA-Z0-9_]*)", lower)
     if m:
-        a, b = m.group(1), m.group(2)
-        missing = _missing_signals([a, b], inputs.known_signals)
+        a, b = _resolve_signal_name(m.group(1), inputs), _resolve_signal_name(m.group(2), inputs)
+        missing = _missing_signals(_required_signals([a, b], inputs), inputs.known_signals)
         if missing:
             return [
                 _fallback_assert(
@@ -223,8 +251,8 @@ def _text_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs) -> l
         lower,
     )
     if m:
-        req, bound, ack = m.group(1), int(m.group(2)), m.group(3)
-        missing = _missing_signals([req, ack], inputs.known_signals)
+        req, bound, ack = _resolve_signal_name(m.group(1), inputs), int(m.group(2)), _resolve_signal_name(m.group(3), inputs)
+        missing = _missing_signals(_required_signals([req, ack], inputs), inputs.known_signals)
         if missing:
             return [
                 _fallback_assert(
@@ -252,8 +280,8 @@ def _text_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs) -> l
         lower,
     )
     if m:
-        sig, level = m.group(1), m.group(2)
-        missing = _missing_signals([sig], inputs.known_signals)
+        sig, level = _resolve_signal_name(m.group(1), inputs), m.group(2)
+        missing = _missing_signals(_required_signals([sig], inputs), inputs.known_signals)
         if missing:
             return [
                 _fallback_assert(
@@ -294,12 +322,12 @@ def _register_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs) 
     md = clause.metadata
     reg = str(md.get("register", "reg")).strip()
     width = int(str(md.get("width", "32")) or "32")
-    reg_sig = str(md.get("signal") or f"{_sanitize_id(reg)}_q")
+    reg_sig = _resolve_signal_name(str(md.get("signal") or f"{_sanitize_id(reg)}_q"), inputs)
     candidates: list[PropertyCandidate] = []
 
     if "reset" in clause.tags:
         reset_value = str(md.get("reset", "0"))
-        missing = _missing_signals([reg_sig], inputs.known_signals)
+        missing = _missing_signals(_required_signals([reg_sig], inputs), inputs.known_signals)
         if missing:
             candidates.append(
                 _fallback_assert(
@@ -341,8 +369,10 @@ def _register_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs) 
                 )
             )
         else:
-            required = [str(sw_we_signal), str(sw_addr_signal), reg_sig]
-            missing = _missing_signals(required, inputs.known_signals)
+            sw_we_resolved = _resolve_signal_name(str(sw_we_signal), inputs)
+            sw_addr_resolved = _resolve_signal_name(str(sw_addr_signal), inputs)
+            required = [sw_we_resolved, sw_addr_resolved, reg_sig]
+            missing = _missing_signals(_required_signals(required, inputs), inputs.known_signals)
             if missing:
                 candidates.append(
                     _fallback_assert(
@@ -358,7 +388,7 @@ def _register_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs) 
                 addr_const = _const_sv(str(address), sw_addr_width)
                 body = (
                     f"@({clocking(inputs.clock)}) {_reset_disable(inputs.reset, inputs.reset_active_low)} "
-                    f"({sw_we_signal} && ({sw_addr_signal} == {addr_const})) |-> $stable({reg_sig});"
+                    f"({sw_we_resolved} && ({sw_addr_resolved} == {addr_const})) |-> $stable({reg_sig});"
                 )
                 candidates.append(
                     _mk_assert(
@@ -373,8 +403,8 @@ def _register_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs) 
 
 
 def _rule_table_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs) -> list[PropertyCandidate]:
-    condition = str(clause.metadata.get("condition", "")).strip()
-    guarantee = str(clause.metadata.get("guarantee", "")).strip()
+    condition = _apply_aliases(str(clause.metadata.get("condition", "")).strip(), inputs)
+    guarantee = _apply_aliases(str(clause.metadata.get("guarantee", "")).strip(), inputs)
     disable = _reset_disable(inputs.reset, inputs.reset_active_low)
 
     if not condition or not guarantee:
@@ -382,7 +412,7 @@ def _rule_table_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs
         note = "Rule row missing condition or guarantee"
     else:
         required = _extract_identifiers(condition) + _extract_identifiers(guarantee)
-        missing = _missing_signals(sorted(set(required)), inputs.known_signals)
+        missing = _missing_signals(_required_signals(sorted(set(required)), inputs), inputs.known_signals)
         if missing:
             body = _placeholder_body(inputs.clock, inputs.reset, inputs.reset_active_low)
             note = f"Rule references unknown signals: {', '.join(missing)}"
@@ -403,7 +433,7 @@ def _rule_table_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs
 
 def _inline_library_candidate(pattern: LibraryPattern, inputs: SynthesisInputs) -> list[PropertyCandidate]:
     o = pattern.options
-    expr = str(o.get("expr", "")).strip()
+    expr = _apply_aliases(str(o.get("expr", "")).strip(), inputs)
     if not expr:
         return [
             _mk_assert(
@@ -414,12 +444,12 @@ def _inline_library_candidate(pattern: LibraryPattern, inputs: SynthesisInputs) 
             )
         ]
 
-    when = str(o.get("when", "")).strip()
+    when = _apply_aliases(str(o.get("when", "")).strip(), inputs)
     required = _extract_identifiers(expr)
     if when:
         required += _extract_identifiers(when)
 
-    missing = _missing_signals(sorted(set(required)), inputs.known_signals)
+    missing = _missing_signals(_required_signals(sorted(set(required)), inputs), inputs.known_signals)
     if missing:
         return [
             _mk_assert(
@@ -463,15 +493,15 @@ def _canonical_10_candidates(pattern: LibraryPattern, inputs: SynthesisInputs) -
     - 1 coverage property
     """
     o = pattern.options
-    req = str(o.get("req", "req"))
-    ack = str(o.get("ack", "ack"))
-    push = str(o.get("push", "push"))
-    pop = str(o.get("pop", "pop"))
-    full = str(o.get("full", "full"))
-    empty = str(o.get("empty", "empty"))
-    level = str(o.get("level", "level"))
+    req = _resolve_signal_name(str(o.get("req", "req")), inputs)
+    ack = _resolve_signal_name(str(o.get("ack", "ack")), inputs)
+    push = _resolve_signal_name(str(o.get("push", "push")), inputs)
+    pop = _resolve_signal_name(str(o.get("pop", "pop")), inputs)
+    full = _resolve_signal_name(str(o.get("full", "full")), inputs)
+    empty = _resolve_signal_name(str(o.get("empty", "empty")), inputs)
+    level = _resolve_signal_name(str(o.get("level", "level")), inputs)
     level_max = str(o.get("level_max", "4"))
-    valid = str(o.get("valid", "valid"))
+    valid = _resolve_signal_name(str(o.get("valid", "valid")), inputs)
     bound = int(o.get("bound", 4))
     level_width = int(o.get("level_width", 8))
 
@@ -553,8 +583,9 @@ def _canonical_10_candidates(pattern: LibraryPattern, inputs: SynthesisInputs) -
 
     out: list[PropertyCandidate] = []
     for prop_id, name, body, kind, note in specs:
-        required = _extract_identifiers(body)
-        missing = _missing_signals(sorted(set(required)), inputs.known_signals)
+        aliased_body = _apply_aliases(body, inputs)
+        required = _extract_identifiers(aliased_body)
+        missing = _missing_signals(_required_signals(sorted(set(required)), inputs), inputs.known_signals)
         if missing:
             out.append(
                 _mk_assert(
@@ -569,7 +600,7 @@ def _canonical_10_candidates(pattern: LibraryPattern, inputs: SynthesisInputs) -
             _mk_property(
                 prop_id=prop_id,
                 name=name,
-                body=body,
+                body=aliased_body,
                 kind=kind,
                 notes=note,
             )
@@ -585,10 +616,10 @@ def _library_candidates(pattern: LibraryPattern, inputs: SynthesisInputs) -> lis
     candidates: list[PropertyCandidate] = []
 
     if kind == "handshake":
-        req = str(o.get("req", "req"))
-        ack = str(o.get("ack", "ack"))
+        req = _resolve_signal_name(str(o.get("req", "req")), inputs)
+        ack = _resolve_signal_name(str(o.get("ack", "ack")), inputs)
         bound = int(o.get("bound", 8))
-        missing = _missing_signals([req, ack], inputs.known_signals)
+        missing = _missing_signals(_required_signals([req, ack], inputs), inputs.known_signals)
         if missing:
             candidates.append(
                 _mk_assert(
@@ -609,12 +640,12 @@ def _library_candidates(pattern: LibraryPattern, inputs: SynthesisInputs) -> lis
             )
 
     elif kind == "fifo_safety":
-        full = str(o.get("full", "fifo_full"))
-        empty = str(o.get("empty", "fifo_empty"))
-        push = str(o.get("push", "fifo_push"))
-        pop = str(o.get("pop", "fifo_pop"))
+        full = _resolve_signal_name(str(o.get("full", "fifo_full")), inputs)
+        empty = _resolve_signal_name(str(o.get("empty", "fifo_empty")), inputs)
+        push = _resolve_signal_name(str(o.get("push", "fifo_push")), inputs)
+        pop = _resolve_signal_name(str(o.get("pop", "fifo_pop")), inputs)
 
-        missing = _missing_signals([full, empty, push, pop], inputs.known_signals)
+        missing = _missing_signals(_required_signals([full, empty, push, pop], inputs), inputs.known_signals)
         if missing:
             candidates.append(
                 _mk_assert(
@@ -643,11 +674,11 @@ def _library_candidates(pattern: LibraryPattern, inputs: SynthesisInputs) -> lis
             )
 
     elif kind == "reset_sequence":
-        signal = str(o.get("signal", "valid"))
+        signal = _resolve_signal_name(str(o.get("signal", "valid")), inputs)
         value = str(o.get("value", "0"))
         latency = int(o.get("latency", 1))
 
-        missing = _missing_signals([signal], inputs.known_signals)
+        missing = _missing_signals(_required_signals([signal], inputs), inputs.known_signals)
         if missing:
             candidates.append(
                 _mk_assert(
@@ -750,3 +781,27 @@ def is_placeholder_candidate(candidate: PropertyCandidate) -> bool:
     if "placeholder" in note:
         return True
     return "1'b1 |-> 1'b1" in candidate.body
+
+
+def optimize_candidates(candidates: list[PropertyCandidate], max_placeholders: int = 3) -> list[PropertyCandidate]:
+    """
+    Reduce noise while preserving diversity:
+    - remove duplicate property bodies
+    - cap placeholder properties
+    """
+    out: list[PropertyCandidate] = []
+    seen: set[tuple[str, str]] = set()
+    placeholder_count = 0
+    for c in candidates:
+        sig = (c.kind, c.body.strip())
+        if sig in seen:
+            continue
+        seen.add(sig)
+
+        if is_placeholder_candidate(c):
+            if placeholder_count >= max_placeholders:
+                continue
+            placeholder_count += 1
+
+        out.append(c)
+    return out

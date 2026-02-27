@@ -16,6 +16,7 @@ class ProjectConfig:
     clock: str = "clk"
     reset: str = "rst_n"
     reset_active_low: bool = True
+    signal_aliases: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -41,6 +42,27 @@ class LoopConfig:
 
 
 @dataclass
+class ConstraintItem:
+    name: str
+    expr: str
+    kind: str
+    when: str | None = None
+    note: str | None = None
+
+
+@dataclass
+class ConstraintsConfig:
+    assumptions: list[ConstraintItem] = field(default_factory=list)
+    covers: list[ConstraintItem] = field(default_factory=list)
+
+
+@dataclass
+class KPIConfig:
+    min_time_reduction_percent: float = 30.0
+    require_bug_or_coverage: bool = True
+
+
+@dataclass
 class SpecInput:
     kind: str
     path: Path
@@ -60,6 +82,8 @@ class FormalChipConfig:
     llm: LLMConfig
     engine: EngineConfig
     loop: LoopConfig
+    constraints: ConstraintsConfig
+    kpi: KPIConfig
     specs: list[SpecInput]
     libraries: list[LibraryPattern]
 
@@ -120,6 +144,7 @@ def load_config(path: str | Path) -> FormalChipConfig:
         clock=str(project_raw.get("clock", "clk")),
         reset=str(project_raw.get("reset", "rst_n")),
         reset_active_low=bool(project_raw.get("reset_active_low", True)),
+        signal_aliases={str(k): str(v) for k, v in dict(project_raw.get("signal_aliases", {})).items()},
     )
 
     llm_raw = raw.get("llm", {})
@@ -143,6 +168,53 @@ def load_config(path: str | Path) -> FormalChipConfig:
         max_iterations=int(loop_raw.get("max_iterations", 3)),
         workdir=_resolve_path(base, loop_raw.get("workdir"))
         or (base / ".formalchip" / "runs").resolve(),
+    )
+
+    constraints_raw = raw.get("constraints", {})
+    if not isinstance(constraints_raw, dict):
+        raise ValueError("[constraints] must be a table/object")
+
+    assumptions: list[ConstraintItem] = []
+    for idx, item in enumerate(constraints_raw.get("assumptions", [])):
+        if not isinstance(item, dict):
+            raise ValueError(f"constraints.assumptions[{idx}] must be a table/object")
+        expr = str(item.get("expr", "")).strip()
+        if not expr:
+            raise ValueError(f"constraints.assumptions[{idx}].expr is required")
+        assumptions.append(
+            ConstraintItem(
+                name=str(item.get("name", f"assumption_{idx+1}")),
+                expr=expr,
+                kind="assume",
+                when=str(item.get("when")).strip() if item.get("when") is not None else None,
+                note=str(item.get("note")).strip() if item.get("note") is not None else None,
+            )
+        )
+
+    covers: list[ConstraintItem] = []
+    for idx, item in enumerate(constraints_raw.get("covers", [])):
+        if not isinstance(item, dict):
+            raise ValueError(f"constraints.covers[{idx}] must be a table/object")
+        expr = str(item.get("expr", "")).strip()
+        if not expr:
+            raise ValueError(f"constraints.covers[{idx}].expr is required")
+        covers.append(
+            ConstraintItem(
+                name=str(item.get("name", f"cover_{idx+1}")),
+                expr=expr,
+                kind="cover",
+                when=str(item.get("when")).strip() if item.get("when") is not None else None,
+                note=str(item.get("note")).strip() if item.get("note") is not None else None,
+            )
+        )
+    constraints = ConstraintsConfig(assumptions=assumptions, covers=covers)
+
+    kpi_raw = raw.get("kpi", {})
+    if not isinstance(kpi_raw, dict):
+        raise ValueError("[kpi] must be a table/object")
+    kpi = KPIConfig(
+        min_time_reduction_percent=float(kpi_raw.get("min_time_reduction_percent", 30.0)),
+        require_bug_or_coverage=bool(kpi_raw.get("require_bug_or_coverage", True)),
     )
 
     specs_raw = raw.get("specs", [])
@@ -174,6 +246,8 @@ def load_config(path: str | Path) -> FormalChipConfig:
         llm=llm,
         engine=engine,
         loop=loop,
+        constraints=constraints,
+        kpi=kpi,
         specs=specs,
         libraries=libraries,
     )

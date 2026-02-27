@@ -12,11 +12,16 @@ class IterationRecord:
     iteration: int
     property_file: str
     engine_log: str
+    started_at: str
+    completed_at: str
+    duration_s: float
     status: str
     summary: str
     failed_properties: list[str] = field(default_factory=list)
     counterexamples: list[str] = field(default_factory=list)
     unsat_cores: list[str] = field(default_factory=list)
+    coverage_hits: int = 0
+    artifact_files: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -55,11 +60,16 @@ class RunRecorder:
                         "iteration": it.iteration,
                         "property_file": it.property_file,
                         "engine_log": it.engine_log,
+                        "started_at": it.started_at,
+                        "completed_at": it.completed_at,
+                        "duration_s": it.duration_s,
                         "status": it.status,
                         "summary": it.summary,
                         "failed_properties": it.failed_properties,
                         "counterexamples": it.counterexamples,
                         "unsat_cores": it.unsat_cores,
+                        "coverage_hits": it.coverage_hits,
+                        "artifact_files": it.artifact_files,
                     }
                     for it in self.state.iterations
                 ],

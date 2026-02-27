@@ -44,6 +44,13 @@ class CLIWorkflowTests(unittest.TestCase):
             self.assertTrue((root / "rtl" / "fifo_buggy.sv").exists())
             self.assertTrue((root / "ci" / "run-pilot.sh").exists())
 
+    def test_engine_template_command(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "questa.tcl"
+            rc = main(["engine-template", "--engine", "questa", "--out", str(out)])
+            self.assertEqual(rc, 0)
+            self.assertTrue(out.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

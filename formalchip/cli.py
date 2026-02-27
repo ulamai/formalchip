@@ -7,11 +7,13 @@ from pathlib import Path
 from .config import load_config
 from .doctor import format_doctor_report, run_doctor
 from .evidence import build_evidence_pack
+from .kpi import compute_kpi_report
 from .loop import run_formalchip
 from .pipeline import build_initial_synthesis
 from .pilot import scaffold_open_source_pilot
-from .reporting import load_report
+from .reporting import load_gate_verdict, load_report
 from .synthesis import is_placeholder_candidate, write_candidate_file
+from .templates import export_engine_template, supported_engine_templates
 from .util import write_json
 
 
@@ -27,6 +29,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Scaffold an open-source pilot package (RTL + canonical 10 properties + CI/evidence layout)",
     )
     p_pilot.add_argument("path", nargs="?", default="examples/open-pilot", help="Target directory")
+
+    p_engine = sub.add_parser("engine-template", help="Export vendor engine integration template script")
+    p_engine.add_argument("--engine", required=True, help="Engine kind: vcformal | jasper | questa")
+    p_engine.add_argument("--out", required=False, help="Output script path")
 
     p_doctor = sub.add_parser("doctor", help="Validate config/tooling and preview synthesis quality")
     p_doctor.add_argument("--config", required=True, help="Path to formalchip config (toml/json/yaml)")
@@ -54,6 +60,13 @@ def main(argv: list[str] | None = None) -> int:
     p_report = sub.add_parser("report", help="Print run summary report")
     p_report.add_argument("--run-dir", required=True, help="Run directory (.formalchip/runs/<run-id>)")
     p_report.add_argument("--format", choices=["text", "json"], default="text")
+    p_report.add_argument("--include-gate", action="store_true", help="Include gate verdict in output")
+
+    p_kpi = sub.add_parser("kpi", help="Generate KPI report for a run")
+    p_kpi.add_argument("--run-dir", required=True, help="Run directory (.formalchip/runs/<run-id>)")
+    p_kpi.add_argument("--config", required=False, help="Optional config path (for KPI policy)")
+    p_kpi.add_argument("--baseline-csv", required=False, help="Optional baseline study CSV")
+    p_kpi.add_argument("--format", choices=["text", "json"], default="text")
 
     args = parser.parse_args(argv)
 
@@ -65,6 +78,18 @@ def main(argv: list[str] | None = None) -> int:
         target = Path(args.path).resolve()
         scaffold_open_source_pilot(target)
         print(f"Initialized open-source pilot at {target}")
+        return 0
+
+    if args.cmd == "engine-template":
+        supported = supported_engine_templates()
+        engine = args.engine.lower().strip()
+        if engine not in supported:
+            print(f"Unsupported engine template: {engine}")
+            print(f"supported={','.join(supported)}")
+            return 2
+        out = Path(args.out).resolve() if args.out else Path.cwd() / f"{engine}.run.tcl"
+        export_engine_template(engine=engine, output_path=out)
+        print(out)
         return 0
 
     if args.cmd == "doctor":
@@ -116,6 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         if state.reports:
             print(f"summary_json={state.reports.get('json', '')}")
             print(f"summary_md={state.reports.get('markdown', '')}")
+            print(f"gate_json={state.reports.get('gate', '')}")
         if state.evidence_pack:
             print(f"evidence_pack={state.evidence_pack}")
         return 0 if state.status == "pass" else 1
@@ -140,8 +166,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "report":
         run_dir = Path(args.run_dir).resolve()
         summary = load_report(run_dir)
+        gate = load_gate_verdict(run_dir) if args.include_gate else None
         if args.format == "json":
-            print(json.dumps(summary, indent=2, sort_keys=True))
+            payload = {"summary": summary}
+            if gate is not None:
+                payload["gate_verdict"] = gate
+            print(json.dumps(payload if gate is not None else summary, indent=2, sort_keys=True))
         else:
             for key in [
                 "run_id",
@@ -149,10 +179,32 @@ def main(argv: list[str] | None = None) -> int:
                 "iterations",
                 "failed_property_count",
                 "counterexample_lines",
+                "coverage_hits",
+                "artifact_files",
                 "unsat_hints",
                 "evidence_pack",
             ]:
                 print(f"{key}={summary.get(key)}")
+            if gate is not None:
+                print(f"gate_passed={gate.get('passed')}")
+        return 0
+
+    if args.cmd == "kpi":
+        run_dir = Path(args.run_dir).resolve()
+        policy = None
+        if args.config:
+            policy = load_config(args.config).kpi
+        baseline = Path(args.baseline_csv).resolve() if args.baseline_csv else None
+        report = compute_kpi_report(run_dir=run_dir, policy=policy, baseline_csv=baseline)
+        if args.format == "json":
+            print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            print(f"run_id={report.get('run_id')}")
+            print(f"overall_success={report.get('overall_success')}")
+            print(f"bug_or_coverage_achieved={report.get('bug_or_coverage_achieved')}")
+            print(f"time_to_first_meaningful_properties_min={report.get('time_to_first_meaningful_properties_min')}")
+            print(f"meets_time_reduction_target={report.get('meets_time_reduction_target')}")
+            print(f"output={report.get('output')}")
         return 0
 
     return 2
@@ -172,6 +224,7 @@ top_module = "top"
 clock = "clk"
 reset = "rst_n"
 reset_active_low = true
+signal_aliases = { request = "req", acknowledge = "ack" }
 
 [llm]
 backend = "deterministic"
@@ -228,6 +281,18 @@ kind = "inline"
 name = "ctrl_write_decode_valid"
 expr = "(sw_we && (sw_addr == 32'h00000004)) |-> !fifo_full"
 property_kind = "assert"
+
+[constraints]
+assumptions = [
+  { name = "env_no_push_and_pop_when_empty", expr = "!(fifo_push && fifo_pop && fifo_empty)", note = "Environment sanity assumption" }
+]
+covers = [
+  { name = "cover_req_ack", expr = "req ##[1:4] ack", note = "Observe at least one handshake sequence" }
+]
+
+[kpi]
+min_time_reduction_percent = 30.0
+require_bug_or_coverage = true
 """,
     )
 

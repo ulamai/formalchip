@@ -54,6 +54,8 @@ def run_doctor(config: FormalChipConfig) -> DoctorReport:
 
     report.infos.append(f"engine={config.engine.kind}")
     report.infos.append(f"llm_backend={config.llm.backend}")
+    report.infos.append(f"constraints_assumptions={len(config.constraints.assumptions)}")
+    report.infos.append(f"constraints_covers={len(config.constraints.covers)}")
 
     kind = config.engine.kind.lower().strip()
     if kind == "symbiyosys":
@@ -99,6 +101,12 @@ def run_doctor(config: FormalChipConfig) -> DoctorReport:
             report.warnings.append(
                 f"Generated {report.placeholder_count}/{report.candidate_count} placeholder properties."
             )
+        if report.candidate_count > 0:
+            ratio = report.placeholder_count / report.candidate_count
+            if ratio >= 0.3:
+                report.warnings.append(
+                    "Placeholder ratio is high; add signal aliases, structured constraints, or inline properties."
+                )
         if report.candidate_count == 0:
             report.errors.append("No properties were generated from specs/libraries.")
     except Exception as exc:

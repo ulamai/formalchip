@@ -1,0 +1,65 @@
+name: formal-pilot
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build reproducible formal runtime image
+        run: |
+          APT_SNAPSHOT=$(grep '^APT_SNAPSHOT=' formal-tools.lock | cut -d'=' -f2)
+          docker build --build-arg APT_SNAPSHOT=${APT_SNAPSHOT} -t formalchip-ci:${GITHUB_SHA} .
+
+      - name: Run open-source pilot with SymbiYosys
+        run: |
+          docker run --rm \
+            -v "${PWD}:/workspace" \
+            -w /workspace \
+            formalchip-ci:${GITHUB_SHA} \
+            bash -lc '
+              set -euo pipefail
+              rm -rf .ci-pilot
+              formalchip pilot-init .ci-pilot
+
+              formalchip doctor --config .ci-pilot/formalchip.toml
+              formalchip synth --config .ci-pilot/formalchip.toml --deterministic --summary-json .ci-pilot/.formalchip/preview/synth-summary.json
+
+              # Run formal; this may fail when the intentional bug is exposed.
+              set +e
+              formalchip run --config .ci-pilot/formalchip.toml
+              rc=$?
+              set -e
+              echo "formalchip_run_exit=${rc}"
+
+              run_id=$(ls -1 .ci-pilot/.formalchip/runs | tail -n 1)
+              run_dir=".ci-pilot/.formalchip/runs/${run_id}"
+
+              formalchip report --run-dir "${run_dir}" --format json --include-gate > "${run_dir}/report/summary.ci.json"
+              formalchip kpi --run-dir "${run_dir}" --config .ci-pilot/formalchip.toml --format json > "${run_dir}/report/kpi.ci.json"
+
+              # CI gate: evidence + bug/coverage criteria.
+              python3 scripts/evaluate_gate.py \
+                --run-dir "${run_dir}" \
+                --config .ci-pilot/formalchip.toml \
+                --out "${run_dir}/report/gate_eval.ci.json"
+            '
+
+      - name: Upload pilot artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: formalchip-pilot-artifacts
+          path: |
+            .ci-pilot/.formalchip/runs/**
+            .ci-pilot/.formalchip/preview/**
+          if-no-files-found: warn

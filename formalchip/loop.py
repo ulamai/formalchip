@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
+from datetime import datetime, timezone
 
 from .config import FormalChipConfig
 from .engines import make_engine
@@ -12,7 +13,7 @@ from .models import IterationFeedback, RunContext
 from .pipeline import build_initial_synthesis
 from .reporting import write_run_report
 from .run_state import IterationRecord, RunRecorder, RunState
-from .synthesis import write_candidate_file
+from .synthesis import optimize_candidates, write_candidate_file
 from .util import ensure_dir, utc_now_iso
 
 
@@ -53,6 +54,7 @@ def run_formalchip(config: FormalChipConfig, max_iterations_override: int | None
 
     init = build_initial_synthesis(config)
     clauses = init.clauses
+    libraries = init.libraries
     synthesis_inputs = init.inputs
     recorder.trace("clauses_loaded", {"count": len(clauses)})
     recorder.trace("rtl_introspection", {"signal_count": len(synthesis_inputs.known_signals)})
@@ -69,6 +71,8 @@ def run_formalchip(config: FormalChipConfig, max_iterations_override: int | None
         iter_dir = ensure_dir(run_dir / f"iter_{iteration:02d}")
         property_file = iter_dir / "properties.sv"
         write_candidate_file(property_file, candidates)
+        iter_started = utc_now_iso()
+        t0 = datetime.now(timezone.utc)
 
         context = RunContext(
             run_id=run_id,
@@ -104,11 +108,16 @@ def run_formalchip(config: FormalChipConfig, max_iterations_override: int | None
                 iteration=iteration,
                 property_file=str(property_file),
                 engine_log=str(result.log_path),
+                started_at=iter_started,
+                completed_at=utc_now_iso(),
+                duration_s=max(0.0, (datetime.now(timezone.utc) - t0).total_seconds()),
                 status=result.status,
                 summary=result.summary,
                 failed_properties=result.failed_properties,
                 counterexamples=result.counterexamples,
                 unsat_cores=result.unsat_cores,
+                coverage_hits=result.coverage_hits,
+                artifact_files=result.artifact_files,
             )
         )
         recorder.trace(
@@ -135,14 +144,16 @@ def run_formalchip(config: FormalChipConfig, max_iterations_override: int | None
             failed_properties=result.failed_properties,
             counterexamples=result.counterexamples,
             unsat_cores=result.unsat_cores,
+            coverage_hits=result.coverage_hits,
         )
         candidates = llm.repair(
             current=candidates,
             feedback=feedback,
             clauses=clauses,
-            libraries=config.libraries,
+            libraries=libraries,
             synthesis_inputs=synthesis_inputs,
         )
+        candidates = optimize_candidates(candidates)
         recorder.trace("candidates_repaired", {"iteration": iteration, "count": len(candidates)})
 
     state.status = final_status
@@ -151,8 +162,8 @@ def run_formalchip(config: FormalChipConfig, max_iterations_override: int | None
     evidence_output = run_dir / "evidence" / f"formalchip-evidence-{run_id}.tar.gz"
     state.evidence_pack = str(evidence_output.resolve())
 
-    report_json, report_md = write_run_report(run_dir, state)
-    state.reports = {"json": str(report_json), "markdown": str(report_md)}
+    report_json, report_md, gate_json = write_run_report(run_dir, state, kpi=config.kpi)
+    state.reports = {"json": str(report_json), "markdown": str(report_md), "gate": str(gate_json)}
 
     evidence_path = build_evidence_pack(
         run_dir=run_dir,

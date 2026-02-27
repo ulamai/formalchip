@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from formalchip.models import FormalResult
@@ -56,7 +57,10 @@ class SymbiYosysEngine:
         log_path.write_text(out + ("\n" if out else "") + err, encoding="utf-8")
 
         result = parse_symbiyosys_log(log_path)
+        artifact_files = _collect_sby_artifacts(iter_dir)
+        result.artifact_files = artifact_files
         result.metadata.update({"engine": self.name, "returncode": rc, "sby": str(sby_path)})
+        result.metadata["artifact_count"] = len(artifact_files)
         if rc != 0 and result.status == "unknown":
             result.status = "error"
             result.summary = f"status=error, returncode={rc}"
@@ -90,3 +94,34 @@ prep -top {top}
 {files_lines}
 """
 
+
+def _collect_sby_artifacts(iter_dir: Path) -> list[str]:
+    """
+    Collect witness-like artifacts into a stable path under artifacts/witnesses.
+    Returns paths relative to iteration directory.
+    """
+    keep_ext = {".vcd", ".yw", ".aiw", ".cex", ".json", ".smtc", ".txt"}
+    src_files: list[Path] = []
+    for path in iter_dir.rglob("*"):
+        if path.is_dir():
+            continue
+        if path.name in {"engine.log", "run.sby", "properties.sv"}:
+            continue
+        if path.suffix.lower() in keep_ext or "trace" in path.name.lower() or "witness" in path.name.lower():
+            src_files.append(path)
+
+    if not src_files:
+        return []
+
+    dst_root = iter_dir / "artifacts" / "witnesses"
+    dst_root.mkdir(parents=True, exist_ok=True)
+    out: list[str] = []
+    for src in sorted(src_files):
+        rel = src.relative_to(iter_dir)
+        # Preserve subpaths while avoiding collisions.
+        dst = dst_root / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.resolve() != dst.resolve():
+            shutil.copy2(src, dst)
+        out.append(str(dst.relative_to(iter_dir)))
+    return out

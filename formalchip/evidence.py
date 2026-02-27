@@ -53,6 +53,13 @@ def _build_manifest(run_dir: Path, config_path: Path, tool_versions: dict[str, s
         )
 
     config_digest = sha256_file(config_path) if config_path.exists() else None
+    gate_path = run_dir / "report" / "gate_verdict.json"
+    gate_verdict = None
+    if gate_path.exists():
+        try:
+            gate_verdict = json.loads(gate_path.read_text(encoding="utf-8"))
+        except Exception:
+            gate_verdict = None
     return {
         "generated_at": utc_now_iso(),
         "run_dir": str(run_dir),
@@ -60,6 +67,7 @@ def _build_manifest(run_dir: Path, config_path: Path, tool_versions: dict[str, s
         "config_sha256": config_digest,
         "tool_versions": tool_versions,
         "runtime": gather_runtime_facts(),
+        "gate_verdict": gate_verdict,
         "files": files,
     }
 
@@ -69,4 +77,3 @@ def read_state(run_dir: Path) -> dict[str, Any]:
     if not state_path.exists():
         return {}
     return json.loads(state_path.read_text(encoding="utf-8"))
-

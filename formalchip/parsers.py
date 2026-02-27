@@ -22,6 +22,7 @@ def parse_symbiyosys_log(log_path: Path) -> FormalResult:
     failed = sorted(set(_collect_failed_names(text)))
     cex = _collect_counterexample_lines(text)
     unsat = _collect_unsat_lines(text)
+    coverage_hits = _count_coverage_hits(text)
 
     summary = _summarize(status, failed, cex, unsat)
     return FormalResult(
@@ -31,6 +32,7 @@ def parse_symbiyosys_log(log_path: Path) -> FormalResult:
         failed_properties=failed,
         counterexamples=cex,
         unsat_cores=unsat,
+        coverage_hits=coverage_hits,
     )
 
 
@@ -41,6 +43,7 @@ def parse_generic_log(log_path: Path) -> FormalResult:
     failed = sorted(set(_collect_failed_names(text)))
     cex = _collect_counterexample_lines(text)
     unsat = _collect_unsat_lines(text)
+    coverage_hits = _count_coverage_hits(text)
 
     return FormalResult(
         status=status,  # type: ignore[arg-type]
@@ -49,6 +52,7 @@ def parse_generic_log(log_path: Path) -> FormalResult:
         failed_properties=failed,
         counterexamples=cex,
         unsat_cores=unsat,
+        coverage_hits=coverage_hits,
     )
 
 
@@ -101,6 +105,15 @@ def _collect_unsat_lines(text: str) -> list[str]:
     return out[:30]
 
 
+def _count_coverage_hits(text: str) -> int:
+    count = 0
+    for line in text.splitlines():
+        lo = line.lower()
+        if "cover" in lo and any(k in lo for k in ["reached", "passed", "triggered", "hit"]):
+            count += 1
+    return count
+
+
 def _summarize(status: str, failed: list[str], cex: list[str], unsat: list[str]) -> str:
     pieces = [f"status={status}"]
     if failed:
@@ -110,4 +123,3 @@ def _summarize(status: str, failed: list[str], cex: list[str], unsat: list[str])
     if unsat:
         pieces.append(f"unsat_hints={len(unsat)}")
     return ", ".join(pieces)
-
