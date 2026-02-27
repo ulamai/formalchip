@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from formalchip.models import SpecClause
 
 
-def parse_text_spec(path: Path) -> list[SpecClause]:
+def parse_text_spec(path: Path, options: dict[str, Any] | None = None) -> list[SpecClause]:
+    _ = options
     clauses: list[SpecClause] = []
     lines = path.read_text(encoding="utf-8").splitlines()
     counter = 0
@@ -28,4 +30,3 @@ def parse_text_spec(path: Path) -> list[SpecClause]:
             )
         )
     return clauses
-

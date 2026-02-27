@@ -9,10 +9,10 @@ from .engines.base import EngineRunInput
 from .evidence import build_evidence_pack
 from .llm import make_llm_backend
 from .models import IterationFeedback, RunContext
-from .rtl import collect_signals
+from .pipeline import build_initial_synthesis
+from .reporting import write_run_report
 from .run_state import IterationRecord, RunRecorder, RunState
-from .spec_ingest import load_spec_clauses
-from .synthesis import SynthesisInputs, write_candidate_file
+from .synthesis import write_candidate_file
 from .util import ensure_dir, utc_now_iso
 
 
@@ -51,26 +51,17 @@ def run_formalchip(config: FormalChipConfig, max_iterations_override: int | None
         },
     )
 
-    clauses = load_spec_clauses(config.specs)
+    init = build_initial_synthesis(config)
+    clauses = init.clauses
+    synthesis_inputs = init.inputs
     recorder.trace("clauses_loaded", {"count": len(clauses)})
-
-    known_signals = collect_signals(config.project.rtl_files)
-    known_signals.add(config.project.clock)
-    known_signals.add(config.project.reset)
-    recorder.trace("rtl_introspection", {"signal_count": len(known_signals)})
-
-    synthesis_inputs = SynthesisInputs(
-        clock=config.project.clock,
-        reset=config.project.reset,
-        reset_active_low=config.project.reset_active_low,
-        known_signals=known_signals,
-    )
+    recorder.trace("rtl_introspection", {"signal_count": len(synthesis_inputs.known_signals)})
 
     llm = make_llm_backend(config.llm)
     engine = make_engine(config.engine)
     tool_versions = {engine.name: engine.tool_version()}
 
-    candidates = llm.propose(clauses=clauses, libraries=config.libraries, synthesis_inputs=synthesis_inputs)
+    candidates = init.candidates
     recorder.trace("initial_candidates", {"count": len(candidates)})
 
     final_status = "fail"
@@ -157,10 +148,17 @@ def run_formalchip(config: FormalChipConfig, max_iterations_override: int | None
     state.status = final_status
     state.completed_at = utc_now_iso()
 
+    evidence_output = run_dir / "evidence" / f"formalchip-evidence-{run_id}.tar.gz"
+    state.evidence_pack = str(evidence_output.resolve())
+
+    report_json, report_md = write_run_report(run_dir, state)
+    state.reports = {"json": str(report_json), "markdown": str(report_md)}
+
     evidence_path = build_evidence_pack(
         run_dir=run_dir,
         config_path=config.config_path,
         tool_versions=tool_versions,
+        output_path=evidence_output,
     )
     state.evidence_pack = str(evidence_path)
 

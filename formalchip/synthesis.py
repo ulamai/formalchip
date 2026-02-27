@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from .config import LibraryPattern
 from .models import PropertyCandidate, SpecClause
@@ -30,6 +31,13 @@ _SV_KEYWORDS = {
     "false",
 }
 
+SUPPORTED_LIBRARY_KINDS = {
+    "handshake",
+    "fifo_safety",
+    "reset_sequence",
+    "inline",
+}
+
 
 @dataclass
 class SynthesisInputs:
@@ -37,6 +45,10 @@ class SynthesisInputs:
     reset: str
     reset_active_low: bool
     known_signals: set[str] = field(default_factory=set)
+
+
+def supported_library_kinds() -> set[str]:
+    return set(SUPPORTED_LIBRARY_KINDS)
 
 
 def _sanitize_id(value: str) -> str:
@@ -67,15 +79,26 @@ def _const_sv(value: str, width: int = 32) -> str:
     return value
 
 
-def _mk_assert(prop_id: str, name: str, body: str, source_clause: str | None = None, notes: str | None = None) -> PropertyCandidate:
+def _mk_property(
+    prop_id: str,
+    name: str,
+    body: str,
+    kind: Literal["assert", "assume", "cover"] = "assert",
+    source_clause: str | None = None,
+    notes: str | None = None,
+) -> PropertyCandidate:
     return PropertyCandidate(
         prop_id=prop_id,
         name=_sanitize_id(name),
         body=body,
-        kind="assert",
+        kind=kind,
         source_clause=source_clause,
         notes=notes,
     )
+
+
+def _mk_assert(prop_id: str, name: str, body: str, source_clause: str | None = None, notes: str | None = None) -> PropertyCandidate:
+    return _mk_property(prop_id=prop_id, name=name, body=body, kind="assert", source_clause=source_clause, notes=notes)
 
 
 def _placeholder_body(clock: str, reset: str, active_low: bool) -> str:
@@ -201,6 +224,38 @@ def _text_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs) -> l
             )
         ]
 
+    # Pattern: "x should be low/high right after reset"
+    m = re.search(
+        r"([a-zA-Z_][a-zA-Z0-9_]*)\s+should\s+be\s+(low|high)\s+right\s+after\s+reset",
+        lower,
+    )
+    if m:
+        sig, level = m.group(1), m.group(2)
+        missing = _missing_signals([sig], inputs.known_signals)
+        if missing:
+            return [
+                _fallback_assert(
+                    clause,
+                    f"{clause.clause_id}_placeholder",
+                    inputs.clock,
+                    inputs.reset,
+                    inputs.reset_active_low,
+                    f"Signals not found in RTL: {', '.join(missing)}",
+                )
+            ]
+
+        expected = "1'b0" if level == "low" else "1'b1"
+        reset_expr = _reset_asserted(inputs.reset, inputs.reset_active_low)
+        body = f"@({clocking(inputs.clock)}) {reset_expr} |=> ({sig} == {expected});"
+        return [
+            _mk_assert(
+                clause.clause_id,
+                f"{clause.clause_id}_{sig}_reset_{level}",
+                body,
+                source_clause=clause.clause_id,
+            )
+        ]
+
     return [
         _fallback_assert(
             clause,
@@ -217,7 +272,7 @@ def _register_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs) 
     md = clause.metadata
     reg = str(md.get("register", "reg")).strip()
     width = int(str(md.get("width", "32")) or "32")
-    reg_sig = f"{_sanitize_id(reg)}_q"
+    reg_sig = str(md.get("signal") or f"{_sanitize_id(reg)}_q")
     candidates: list[PropertyCandidate] = []
 
     if "reset" in clause.tags:
@@ -247,17 +302,50 @@ def _register_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs) 
             )
 
     if "read_only" in clause.tags:
-        # RO checks typically require explicit bus/control mapping from integration config.
-        candidates.append(
-            _fallback_assert(
-                clause,
-                f"{clause.clause_id}_{reg_sig}_ro_placeholder",
-                inputs.clock,
-                inputs.reset,
-                inputs.reset_active_low,
-                "Read-only check requires interface mapping (write enable/address signals).",
+        sw_we_signal = md.get("sw_we_signal")
+        sw_addr_signal = md.get("sw_addr_signal")
+        sw_addr_width = int(md.get("sw_addr_width", 32))
+        address = md.get("address")
+
+        if not (sw_we_signal and sw_addr_signal and address):
+            candidates.append(
+                _fallback_assert(
+                    clause,
+                    f"{clause.clause_id}_{reg_sig}_ro_placeholder",
+                    inputs.clock,
+                    inputs.reset,
+                    inputs.reset_active_low,
+                    "Read-only check requires sw_we_signal, sw_addr_signal, and register address mapping.",
+                )
             )
-        )
+        else:
+            required = [str(sw_we_signal), str(sw_addr_signal), reg_sig]
+            missing = _missing_signals(required, inputs.known_signals)
+            if missing:
+                candidates.append(
+                    _fallback_assert(
+                        clause,
+                        f"{clause.clause_id}_{reg_sig}_ro_placeholder",
+                        inputs.clock,
+                        inputs.reset,
+                        inputs.reset_active_low,
+                        f"Read-only mapping references unknown signals: {', '.join(missing)}",
+                    )
+                )
+            else:
+                addr_const = _const_sv(str(address), sw_addr_width)
+                body = (
+                    f"@({clocking(inputs.clock)}) {_reset_disable(inputs.reset, inputs.reset_active_low)} "
+                    f"({sw_we_signal} && ({sw_addr_signal} == {addr_const})) |-> $stable({reg_sig});"
+                )
+                candidates.append(
+                    _mk_assert(
+                        clause.clause_id,
+                        f"{clause.clause_id}_{reg_sig}_ro",
+                        body,
+                        source_clause=clause.clause_id,
+                    )
+                )
 
     return candidates
 
@@ -287,6 +375,59 @@ def _rule_table_clause_to_candidates(clause: SpecClause, inputs: SynthesisInputs
             body,
             source_clause=clause.clause_id,
             notes=note,
+        )
+    ]
+
+
+def _inline_library_candidate(pattern: LibraryPattern, inputs: SynthesisInputs) -> list[PropertyCandidate]:
+    o = pattern.options
+    expr = str(o.get("expr", "")).strip()
+    if not expr:
+        return [
+            _mk_assert(
+                "lib_inline",
+                str(o.get("name", "lib_inline_placeholder")),
+                _placeholder_body(inputs.clock, inputs.reset, inputs.reset_active_low),
+                notes="Inline property requires `expr`",
+            )
+        ]
+
+    when = str(o.get("when", "")).strip()
+    required = _extract_identifiers(expr)
+    if when:
+        required += _extract_identifiers(when)
+
+    missing = _missing_signals(sorted(set(required)), inputs.known_signals)
+    if missing:
+        return [
+            _mk_assert(
+                "lib_inline",
+                str(o.get("name", "lib_inline_placeholder")),
+                _placeholder_body(inputs.clock, inputs.reset, inputs.reset_active_low),
+                notes=f"Inline property references unknown signals: {', '.join(missing)}",
+            )
+        ]
+
+    disable = _reset_disable(inputs.reset, inputs.reset_active_low)
+    if when:
+        body = f"@({clocking(inputs.clock)}) {disable} ({when}) |-> ({expr});"
+    else:
+        body = f"@({clocking(inputs.clock)}) {disable} ({expr});"
+
+    raw_kind = str(o.get("property_kind", "assert")).strip().lower()
+    kind: Literal["assert", "assume", "cover"]
+    if raw_kind in {"assert", "assume", "cover"}:
+        kind = raw_kind  # type: ignore[assignment]
+    else:
+        kind = "assert"
+
+    return [
+        _mk_property(
+            prop_id=str(o.get("id", "lib_inline")),
+            name=str(o.get("name", "lib_inline")),
+            body=body,
+            kind=kind,
+            notes=o.get("note"),
         )
     ]
 
@@ -381,6 +522,9 @@ def _library_candidates(pattern: LibraryPattern, inputs: SynthesisInputs) -> lis
                 )
             )
 
+    elif kind == "inline":
+        candidates.extend(_inline_library_candidate(pattern, inputs))
+
     return candidates
 
 
@@ -452,3 +596,9 @@ def write_candidate_file(path: Path, candidates: list[PropertyCandidate]) -> Non
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(serialize_sva(candidates), encoding="utf-8")
 
+
+def is_placeholder_candidate(candidate: PropertyCandidate) -> bool:
+    note = (candidate.notes or "").lower()
+    if "placeholder" in note:
+        return True
+    return "1'b1 |-> 1'b1" in candidate.body

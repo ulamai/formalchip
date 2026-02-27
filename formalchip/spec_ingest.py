@@ -19,6 +19,5 @@ def load_spec_clauses(specs: list[SpecInput]) -> list[SpecClause]:
         fn = SUPPORTED_SPEC_KINDS.get(spec.kind)
         if fn is None:
             raise ValueError(f"Unsupported spec kind: {spec.kind}")
-        out.extend(fn(spec.path))
+        out.extend(fn(spec.path, spec.options))
     return out
-

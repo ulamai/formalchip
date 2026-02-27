@@ -28,6 +28,7 @@ class RunState:
     completed_at: str | None = None
     iterations: list[IterationRecord] = field(default_factory=list)
     evidence_pack: str | None = None
+    reports: dict[str, str] = field(default_factory=dict)
 
 
 class RunRecorder:
@@ -48,6 +49,7 @@ class RunRecorder:
                 "status": self.state.status,
                 "config_path": self.state.config_path,
                 "evidence_pack": self.state.evidence_pack,
+                "reports": self.state.reports,
                 "iterations": [
                     {
                         "iteration": it.iteration,
@@ -73,4 +75,3 @@ class RunRecorder:
                 "payload": payload or {},
             },
         )
-

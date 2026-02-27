@@ -6,48 +6,57 @@ FormalChip is an UlamaI-style control loop for hardware formal verification:
 2. Run a formal engine (SymbiYosys pilot, with wrappers for proprietary tools).
 3. Parse counterexamples / failures.
 4. Repair and retry.
-5. Emit a reproducible signoff evidence pack.
+5. Emit reproducible signoff evidence + run summaries.
 
-## Why this exists
+## What is useful in v1
 
-Hardware teams already use formal engines. The bottleneck is writing and maintaining properties, constraints, and audit artifacts. FormalChip focuses on reducing adoption cost and broadening coverage.
-
-## Current MVP capabilities
-
+- Preflight checks with `formalchip doctor`:
+  - missing RTL/spec files
+  - engine command availability
+  - top-module detection sanity checks
+  - synthesis quality signal (placeholder property counts)
+- Property preview with `formalchip synth` before formal runtime cost.
 - Spec ingestion:
-  - Free-form text/markdown clauses
-  - Register CSV definitions
+  - Free-form text clauses
+  - Register CSV definitions with optional bus mapping
   - IP-XACT register XML
   - Generic rule-table CSV
 - Property synthesis:
-  - Reset, handshake, and table-driven rule templates
-  - Reusable library patterns configured in `formalchip.toml`
+  - Reset, handshake, FIFO, and table-driven templates
+  - Inline custom properties (`[[libraries]] kind = "inline"`)
 - Formal adapters:
   - `symbiyosys` (real command runner)
-  - `mock` (for local testing/CI without a solver)
+  - `mock` (CI-safe testing)
   - `vcformal`, `jasper`, `questa` command wrappers
-- Evidence packs:
-  - Run state, config, tool versions, logs, generated SVAs
-  - SHA-256 manifest and tarball export
+- Run artifacts:
+  - state + trace logs
+  - generated property files per iteration
+  - run summary (`report/summary.json`, `report/summary.md`)
+  - evidence pack with manifest + hashes
 
 ## Quickstart
 
 ```bash
-python -m formalchip init examples/pilot
-python -m formalchip run --config examples/pilot/formalchip.toml
+python3 -m formalchip init examples/pilot
+python3 -m formalchip doctor --config examples/pilot/formalchip.toml
+python3 -m formalchip synth --config examples/pilot/formalchip.toml --deterministic
+python3 -m formalchip run --config examples/pilot/formalchip.toml
 ```
 
-Inspect artifacts in `.formalchip/runs/<run-id>/`.
+Inspect artifacts in `examples/pilot/.formalchip/runs/<run-id>/`.
 
 ## CLI
 
 ```bash
 formalchip init [path]
-formalchip run --config formalchip.toml [--max-iters N]
+formalchip doctor --config formalchip.toml
+formalchip synth --config formalchip.toml [--out properties.sv] [--summary-json synth.json] [--deterministic]
+formalchip run --config formalchip.toml [--max-iters N] [--skip-doctor]
+formalchip report --run-dir .formalchip/runs/<run-id> [--format text|json]
 formalchip evidence --run-dir .formalchip/runs/<run-id> [--out evidence.tar.gz]
 ```
 
-## Configuration
+## Config patterns
 
 See [`examples/pilot/formalchip.toml`](examples/pilot/formalchip.toml).
 
@@ -58,10 +67,31 @@ Key sections:
 - `[engine]`: `kind = "symbiyosys" | "mock" | "vcformal" | "jasper" | "questa"`
 - `[loop]`: iteration controls and run directory
 - `[[specs]]`: spec artifacts
-- `[[libraries]]`: reusable intent patterns
+- `[[libraries]]`: reusable intent patterns + inline custom properties
 
-## Notes
+### Register CSV mapping options
+
+For `[[specs]] kind = "register_csv"`, optional fields:
+
+- `signal_template` (default: `"{name_lower}_q"`)
+- `sw_we_signal`
+- `sw_addr_signal`
+- `sw_addr_width` (default: `32`)
+
+When these are set and signals exist in RTL, FormalChip emits real read-only CSR assertions instead of placeholders.
+
+### Inline property library
+
+```toml
+[[libraries]]
+kind = "inline"
+name = "ctrl_write_decode_valid"
+expr = "(sw_we && (sw_addr == 32'h00000004)) |-> !fifo_full"
+property_kind = "assert" # assert | assume | cover
+```
+
+## SymbiYosys notes
 
 - SymbiYosys must be installed to run the open-source formal path.
-- Proprietary engines are represented as scriptable wrappers in this MVP.
+- Use `[engine] kind = "symbiyosys"` and optionally `command` / `sby_file` in config.
 

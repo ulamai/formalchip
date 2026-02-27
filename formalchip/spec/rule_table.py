@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
+from typing import Any
 
 from formalchip.models import SpecClause
 
 
-def parse_rule_table_csv(path: Path) -> list[SpecClause]:
+def parse_rule_table_csv(path: Path, options: dict[str, Any] | None = None) -> list[SpecClause]:
+    _ = options
     clauses: list[SpecClause] = []
     with path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -27,4 +29,3 @@ def parse_rule_table_csv(path: Path) -> list[SpecClause]:
                 )
             )
     return clauses
-
