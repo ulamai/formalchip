@@ -1,6 +1,6 @@
 # FormalChip
 
-FormalChip is an UlamaI-style control loop for hardware formal verification:
+FormalChip is a UlamAI-style control loop for hardware formal verification:
 
 1. Propose properties (SVA) from mixed specification artifacts.
 2. Run a formal engine (SymbiYosys pilot, with wrappers for proprietary tools).
